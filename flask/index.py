@@ -5,7 +5,7 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_jwt_extended import JWTManager,create_access_token,jwt_required,get_jwt_identity, unset_jwt_cookies
 from datetime import timedelta
 app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'mysql://gedas:Mazute15.@saitynai123.mysql.database.azure.com:3306/libraries'
+app.config['SQLALCHEMY_DATABASE_URI'] = {"url"}
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 jwt = JWTManager(app)
 app.config["JWT_SECRET_KEY"] = "super-secret"
