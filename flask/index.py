@@ -4,37 +4,40 @@ from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 from flask_jwt_extended import JWTManager,create_access_token,jwt_required,get_jwt_identity, unset_jwt_cookies
 from datetime import timedelta
+from flask_jwt_extended import create_refresh_token
 app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = {"url"}
+
+app.config['SQLALCHEMY_DATABASE_URI'] = 'mysql://gedas:Mazute15.@saitynai123.mysql.database.azure.com:3306/libraries'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 jwt = JWTManager(app)
 app.config["JWT_SECRET_KEY"] = "super-secret"
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(minutes=5)
+app.config["JWT_REFRESH_TOKEN_EXPIRES"] = timedelta(days=30)
 db = SQLAlchemy(app)
-
 # CORS(app, origins='*', resources={r"/*": {"origins": "http://localhost:5173"}})
-
+CORS(app,origins='*', resources={r"/*": {"origins": "http://localhost:5173"}})
 # DB objects
 class city(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.Integer)
+    name = db.Column(db.String(255))
     population = db.Column(db.Integer)
-    libraries = db.relationship('library', backref='city', lazy=True)
+    libraries = db.relationship('library', backref='city', passive_deletes=True)
 
 class library(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(255))
     address = db.Column(db.String(255))
-    city_id = db.Column(db.Integer, db.ForeignKey('city.id'), nullable=False)
+    city_id = db.Column(db.Integer, db.ForeignKey('city.id', ondelete='CASCADE'))
+    books = db.relationship('book', backref='library', passive_deletes=True)
 
 class book(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    library_id = db.Column(db.Integer, db.ForeignKey('library.id'), nullable=False)
+    library_id = db.Column(db.Integer, db.ForeignKey('library.id', ondelete='CASCADE'))
     name = db.Column(db.String(255), nullable=False)
     author = db.Column(db.String(255))
     print_year = db.Column(db.Integer)
     pages = db.Column(db.Integer)
-    taken_by = db.Column(db.String(255))
+    taken_by = db.Column(db.String(45))
 
 class user(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -50,11 +53,12 @@ def login():
     singleUser = user.query.filter_by(name=data['name'], password=data['password']).first()
 
     if data['name'] == singleUser.name and data['password'] == singleUser.password:
-        access_token = create_access_token(identity=singleUser.role, fresh=True)
+        access_token = create_access_token(identity=singleUser.role,additional_claims={'roles': ['admin']}, fresh=True)
+        refresh_token = create_refresh_token(identity=singleUser.role)
         return jsonify(access_token=access_token), 200
     else:
         return jsonify({"error": "Invalid credentials"}), 401
-
+    
 @app.route('/api/logout', methods=['POST'])
 def logout():
     # Clear the JWT token from the client-side
@@ -63,12 +67,19 @@ def logout():
     return resp
 
 # Get all cities
+@app.route("/refresh", methods=["POST"])
+@jwt_required(refresh=True)
+def refresh():
+    identity = get_jwt_identity()
+    access_token = create_access_token(identity=identity, fresh=False)
+    return jsonify(access_token=access_token)
 
 
 @app.route('/api/cities', methods=['GET'])
+
 def get_cities():
     cities = city.query.all()
-    city_list = [{"id": city.id, "name": city.name, "population": city.population} for city in cities]
+    city_list = [{"id": int(city.id), "name": city.name, "population": int(city.population)} for city in cities]
     return jsonify(city_list)
 
 @app.route('/')
@@ -82,17 +93,22 @@ def get_hello2():
 @app.route('/api/cities', methods=['POST'])
 @jwt_required()
 def create_city():
-    data = request.get_json()
-    new_city = city(name=data['name'], population=data.get('population'))
-    db.session.add(new_city)
-    db.session.commit()
-    return jsonify({"message": "City created successfully", "id": new_city.id}), 201
+    # data = request.get_json()
+    # current_user = get_jwt_identity()
+    # print(current_user)
+    if current_user is "admin":
+        new_city = city(name=data['name'], population=int(data.get('population')))
+        db.session.add(new_city)
+        db.session.commit()
+        return jsonify({"message": "City created successfully", "id": int(new_city.id)}), 201
+    else:
+        return jsonify("Could not create city, insuficcient authorization"),401
 
 @app.route('/api/cities/<int:city_id>', methods=['GET'])
 def get_city(city_id):
     singleCity = city.query.get(city_id)
     if singleCity:
-        return jsonify({"id": singleCity.id, "name": singleCity.name, "population": singleCity.population}),200
+        return jsonify({"id": int(singleCity.id), "name": singleCity.name, "population": int(singleCity.population)}),200
     return jsonify({"error": "City not found"}), 404
 
 @app.route('/api/cities/<int:city_id>', methods=['PUT'])
@@ -103,19 +119,26 @@ def update_city(city_id):
     if singleCity:
         if 'name' in data:
             singleCity.name = data['name']
-        if 'population' in data:
+        if 'population' in data:\
             singleCity.population = data['population']
 
         db.session.commit()
-        return jsonify({"message": "City updated successfully"})
+        return jsonify({"message": "City updated successfully"}),201
     return jsonify({"error": "City not found"}), 404
 
-@app.route('/api/cities/<int:city_id>', methods=['DELETE'])
+@app.route('/api/cities/<int:city_idd>', methods=['DELETE'])
 @jwt_required()
-def delete_city(city_id):
-    singleCity = city.query.get(city_id)
-
+def delete_city(city_idd):
+    singleCity = city.query.get(city_idd)
     if singleCity:
+        libraries_in_city = library.query.filter_by(city_id=city_idd).all()
+        print(libraries_in_city)
+        for singlelibrary in libraries_in_city:
+            # You might need to handle related records in Book, etc., similarly
+            books_in_library = book.query.filter_by(library_id=singlelibrary.id).all()
+            for singlebook in books_in_library:
+                db.session.delete(singlebook)
+            db.session.delete(singlelibrary)
         db.session.delete(singleCity)
         db.session.commit()
         return jsonify({"message": "City deleted successfully"})
@@ -148,29 +171,39 @@ def get_library(city_id, library_id):
 @app.route('/api/cities/<int:city_id>/libraries/<int:library_id>', methods=['PUT'])
 @jwt_required()
 def update_library(city_id, library_id):
-    data = request.get_json()
-    singleLibrary = library.query.filter_by(city_id=city_id, id=library_id).first()
+    current_user = get_jwt_identity()
+    if current_user == 'admin':
+        data = request.get_json()
+        singleLibrary = library.query.filter_by(city_id=city_id, id=library_id).first()
 
-    if singleLibrary:
-        if 'name' in data:
-            singleLibrary.name = data['name']
-        if 'address' in data:
-            singleLibrary.address = data['address']
+        if singleLibrary:
+            if 'name' in data:
+                singleLibrary.name = data['name']
+            if 'address' in data:
+                singleLibrary.address = data['address']
 
-        db.session.commit()
-        return jsonify({"message": "Library updated successfully"})
-    return jsonify({"error": "Library not found"}), 404
+            db.session.commit()
+            return jsonify({"message": "Library updated successfully"})
+    else :
+        return jsonify({"error": "Library not found"}), 404
 
 @app.route('/api/cities/<int:city_id>/libraries/<int:library_id>', methods=['DELETE'])
 @jwt_required()
 def delete_library(city_id, library_id):
-    singleLibrary = library.query.filter_by(city_id=city_id, id=library_id).first()
+    current_user = get_jwt_identity()
+    if current_user == 'admin':
+        singleLibrary = library.query.filter_by(city_id=city_id, id=library_id).first()
 
-    if singleLibrary:
-        db.session.delete(singleLibrary)
-        db.session.commit()
-        return jsonify({"message": "Library deleted successfully"})
-    return jsonify({"error": "Library not found"}), 404
+        if singleLibrary:
+
+            books_in_library = book.query.filter_by(library_id=singleLibrary.id).all()
+            for singlebook in books_in_library:
+                db.session.delete(singlebook)
+            db.session.delete(singleLibrary)
+            db.session.commit()
+            return jsonify({"message": "Library deleted successfully"})
+    else:
+        return jsonify({"error": "Library not found"}), 404
 
 #Book routes
 
@@ -198,7 +231,7 @@ def get_books(city_id, library_id):
          "author": book.author, "print_year": book.print_year, "pages": book.pages,
          "taken_by": book.taken_by} for book in books
     ]
-    return jsonify(book_list)
+    return jsonify(book_list),200
 
 
 @app.route('/api/cities/<int:city_id>/libraries/<int:library_id>/books/<int:book_id>', methods=['GET'])
